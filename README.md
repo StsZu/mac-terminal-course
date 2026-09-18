@@ -16,10 +16,10 @@ open index.html
 
 | Файл | Опис |
 |------|------|
-| [index.html](index.html) | Інтерактивний тренажер Terminal (емуляція zsh, 10 модулів) |
-| [course.html](course.html) | Уроки курсу (Markdown у браузері) |
-| [cheatsheet.html](cheatsheet.html) | Шпаргалка команд |
-| [mac-terminal-course/](mac-terminal-course/) | Повний курс у Markdown (10 уроків + план на 14 днів) |
+| [index.html](index.html) | Курс: 10 модулів, 19 уроків, quiz, фінальний іспит, шпаргалка, словник (генерується з `course-config.js` і `lessons/*.js`) |
+| [trainer.html](trainer.html) | Тренажер-пісочниця (емуляція zsh і RouterOS, 10 розділів, тест-режим) |
+| [course.html](course.html), [cheatsheet.html](cheatsheet.html) | Редиректи на `index.html#/modules` і `#/cheatsheet` |
+| [mac-terminal-course/](mac-terminal-course/) | Архів: вихідні Markdown-уроки (10 уроків + план на 14 днів) |
 
 ## Модулі тренажера
 

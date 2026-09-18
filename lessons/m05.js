@@ -21,7 +21,8 @@ window.CLI_COURSE.modules.push({
         { type: "cli", title: "Підключитися і зробити експорт",
           commands: [
             { cmd: "ssh Stas@10.0.0.254", explain: "Вхід як користувач <code>Stas</code> роутера (це облікові дані RouterOS, не Mac). Далі команди виконуються на роутері.", output: "Stas@10.0.0.254's password:\n\n  MikroTik RouterOS 7.x\n\n[Stas@MikroTik] >", risk: "medium" },
-            { cmd: "/export file=backup", explain: "На роутері: зберігає конфігурацію у файл <code>backup.rsc</code>. Нічого не змінює в налаштуваннях.", risk: "medium" },
+            { cmd: "/export file=backup", explain: "На роутері: зберігає конфігурацію текстом у файл <code>backup.rsc</code>. Нічого не змінює в налаштуваннях. Увага: паролів користувачів RouterOS, SSH-ключів і сертифікатів у ньому немає, а інші секрети (паролі Wi-Fi тощо) приховано, якщо не додати <code>show-sensitive</code>.", risk: "medium" },
+            { cmd: "/system backup save name=full", explain: "На роутері: повний бінарний бекап <code>full.backup</code> з користувачами й паролями — для відновлення на <strong>тому самому</strong> роутері (бажано тієї ж версії RouterOS). Містить секрети: зберігай як пароль.", risk: "medium" },
             { cmd: "/quit", explain: "На роутері: завершити сесію й повернутися в zsh на Mac.", risk: "low" }
           ] },
         { type: "terminal", title: "Спробуй: підключись до роутера",
@@ -44,7 +45,7 @@ window.CLI_COURSE.modules.push({
           expected: ["scp Stas@10.0.0.254:backup.rsc .", "scp Stas@10.0.0.254:backup.rsc ./", "scp Stas@10.0.0.254:backup.rsc ./backup.rsc"],
           output: "backup.rsc                     100% 4213     1.1MB/s   00:00",
           hint: "Спершу джерело `користувач@адреса:файл`, потім призначення — крапка.",
-          explain: "Бекап лежить у тебе на Mac. Тепер зміни на роутері вже не страшні: конфігурацію можна відновити." },
+          explain: "Бекап лежить у тебе на Mac: налаштування можна відновити з `backup.rsc`, але паролі користувачів і SSH-ключі в ньому не зберігаються — для повної копії того самого роутера додай `/system backup save name=full`." },
         { type: "check", title: "Відмова в з'єднанні",
           question: "`ssh Stas@10.0.0.254` відповідає `Connection refused`, хоча `ping` роутера працює. Що перевірити?",
           options: ["Кабель і Wi-Fi", "Чи ввімкнено сервіс SSH на роутері (IP → Services) і чи правильний порт", "Пароль від Wi-Fi"],
@@ -52,7 +53,7 @@ window.CLI_COURSE.modules.push({
         { type: "callout", variant: "warning", title: "Після ssh ти вже не на Mac",
           body: "<p>Коли запрошення стало <code>[Stas@MikroTik] ></code>, кожна команда змінює роутер — і зміни діють одразу. Помилка в правилах firewall може відрізати тебе від роутера.</p><p>Перед ризиковими змінами вмикай Safe Mode (<span class=\"kbd\">Ctrl</span> + <span class=\"kbd\">X</span> у терміналі RouterOS): якщо зв'язок обірветься, роутер відкотить зміни.</p>" },
         { type: "summary", title: "Підсумок",
-          points: ["Pre-check: `ipconfig getifaddr en0` → `route get default` → `ping -c 3 10.0.0.254`.", "`ssh Stas@10.0.0.254` — вхід у RouterOS; `/quit` — назад у zsh.", "На роутері `/export file=backup` зберігає конфігурацію у `backup.rsc`.", "`scp Stas@10.0.0.254:backup.rsc .` — забрати на Mac; двокрапка відділяє хост від шляху.", "`Connection refused` — сервіс SSH не слухає; `Permission denied` — невірний логін, пароль чи ключ."] }
+          points: ["Pre-check: `ipconfig getifaddr en0` → `route get default` → `ping -c 3 10.0.0.254`.", "`ssh Stas@10.0.0.254` — вхід у RouterOS; `/quit` — назад у zsh.", "На роутері `/export file=backup` — текстова конфігурація `backup.rsc` без паролів користувачів і SSH-ключів; `/system backup save name=full` — повний бінарний бекап для того самого роутера.", "`scp Stas@10.0.0.254:backup.rsc .` — забрати на Mac; двокрапка відділяє хост від шляху.", "`Connection refused` — сервіс SSH не слухає; `Permission denied` — невірний логін, пароль чи ключ."] }
       ],
       glossary: [
         { term: "SSH", def: "Протокол зашифрованого віддаленого доступу до командного рядка, порт 22." },
@@ -67,7 +68,7 @@ window.CLI_COURSE.modules.push({
         { question: "Що означає `scp backup.rsc Stas@10.0.0.254:`?", options: ["Завантажити файл з роутера на Mac", "Видалити `backup.rsc` на роутері", "Скопіювати `backup.rsc` з Mac на роутер"], correct: 2, feedback: "Спершу джерело (локальний файл), потім призначення (роутер). Двокрапка в кінці — «у папку за замовчуванням на роутері»." },
         { question: "Ти бачиш запрошення `[Stas@MikroTik] >`. Де зараз виконуються команди?", options: ["На роутері, у RouterOS", "На Mac у zsh", "Ніде"], correct: 0, feedback: "Після `ssh` усе, що ти вводиш, іде на роутер. Команди Mac тут не працюють." },
         { question: "Як завершити SSH-сесію на RouterOS?", options: ["`logout now`", "`/quit` (або Ctrl+D)", "Закрити кришку ноутбука"], correct: 1, feedback: "`/quit` коректно закриває сесію. Закрите вікно теж обірве її, але грубо." },
-        { question: "Навіщо бекап `/export file=backup` забирати на Mac?", options: ["Щоб звільнити пам'ять Mac", "Так вимагає SSH", "Якщо роутер зламається чи скинеться, копія конфігурації лишиться в тебе"], correct: 2, feedback: "Копія на самому роутері зникне разом з ним при скиданні. Бекап має жити окремо." }
+        { question: "Навіщо бекап `/export file=backup` забирати на Mac?", options: ["Щоб звільнити пам'ять Mac", "Так вимагає SSH", "Якщо роутер зламається чи скинеться, копія конфігурації лишиться в тебе"], correct: 2, feedback: "Копія на самому роутері зникне разом з ним при скиданні. Бекап має жити окремо. Пам'ятай: у `.rsc` немає паролів користувачів і SSH-ключів — після відновлення їх задають заново; повну копію для того самого роутера дає `/system backup save`." }
       ]
     },
     {

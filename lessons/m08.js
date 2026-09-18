@@ -90,7 +90,9 @@ window.CLI_COURSE.modules.push({
             { cmd: "git diff --stat", explain: "Коротко: які файли і скільки рядків.", risk: "low" },
             { cmd: "git diff", explain: "Усі зміни рядок за рядком — прочитай перед комітом.", risk: "low" },
             { cmd: "git add . && git commit -m \"AI: refactor app\"", explain: "Зберегти вдалий результат. <code>&&</code> — друга команда запуститься, лише якщо перша успішна.", risk: "medium" },
-            { cmd: "git restore .", explain: "Відкинути всі незакомічені зміни в тих файлах, які Git уже відстежує. Незворотно.", risk: "high" }
+            { cmd: "git restore .", explain: "Відкинути всі незакомічені зміни в тих файлах, які Git уже відстежує. Незворотно.", risk: "high" },
+            { cmd: "git clean -n", explain: "Лише показати нові (untracked) файли, які прибрав би <code>git clean</code>. Нічого не видаляє.", risk: "low" },
+            { cmd: "git clean -fd", explain: "Видалити всі нові файли й папки, яких Git не відстежує, — повз Кошик. Спершу <code>git clean -n</code>.", risk: "high" }
           ] },
         { type: "terminal", title: "Спробуй: огляд змін агента",
           prompt: "Stas@MacBook-Pro demo %",
@@ -101,8 +103,10 @@ window.CLI_COURSE.modules.push({
           explain: "Два файли, 13 рядків. Якщо тут з'явилися несподівані файли — `.env`, конфіги, чужі папки — розберися, перш ніж комітити." },
         { type: "check", title: "Сесія невдала",
           question: "Агент зламав проєкт, після сесії ти ще нічого не комітив. Як повернутися до стану до сесії?",
-          options: ["`rm -rf .git`", "Перевстановити агента", "`git restore .` для змінених файлів і прибрати нові (їх видно в `git status`) — або повернутися на `main` і видалити гілку"],
-          correct: 2, feedback: "Саме для цього був чистий старт і окрема гілка. `rm -rf .git` знищив би всю історію." },
+          options: ["`rm -rf .git`", "Перевстановити агента", "`git restore .` для змінених файлів, потім `git clean -n` (перегляд) і `git clean -fd` для нових — або закомітити все в `ai-experiment`, повернутися на `main` і видалити гілку"],
+          correct: 2, feedback: "Саме для цього був чистий старт і окрема гілка. Просто `git switch main` не допоможе: незакомічені зміни переходять разом з тобою на `main`. `rm -rf .git` знищив би всю історію." },
+        { type: "callout", variant: "danger", title: "Відкат без Undo",
+          body: "<p><code>git restore .</code> стирає <strong>усі</strong> незакомічені зміни у відстежуваних файлах — і агента, і твої, якщо ти не закомітив їх до сесії. <code>git clean -fd</code> назавжди видаляє нові файли й папки, минаючи Кошик. <code>git switch main</code> сам нічого не відкочує: незакомічені зміни або переходять разом з тобою, або Git відмовляється перемикати гілку.</p><p><strong>Безпечніше:</strong> спершу <code>git status</code>, <code>git diff</code> і <code>git clean -n</code>. Якщо сумніваєшся — не стирай, а сховай: <code>git stash -u</code> (разом з новими файлами) або закоміть у <code>ai-experiment</code>; потім <code>git switch main</code> і <code>git branch -D ai-experiment</code>, коли точно не потрібно.</p>" },
         { type: "terminal", title: "Спробуй: збережи вдалий результат",
           prompt: "Stas@MacBook-Pro demo %",
           task: "Ти переглянув `git diff` і все підготував через `git add`. Зафіксуй зміни комітом з повідомленням `AI: refactor app`.",
@@ -111,7 +115,7 @@ window.CLI_COURSE.modules.push({
           hint: "Звичайний коміт з повідомленням у лапках.",
           explain: "Префікс `AI:` у повідомленні допоможе згодом знайти зміни агента в `git log`." },
         { type: "summary", title: "Підсумок",
-          points: ["Режими без підтверджень (`--dangerously-skip-permissions`, `--yolo`) — високий ризик, лише в ізольованому середовищі.", "Назви прапорців агентів залежать від версії — перевіряй `--help`.", "Після сесії: `git status` → `git diff --stat` → `git diff` → коміт або відкат.", "`git restore .` відкидає зміни у відстежуваних файлах без Undo; нові файли видно в `git status`."] }
+          points: ["Режими без підтверджень (`--dangerously-skip-permissions`, `--yolo`) — високий ризик, лише в ізольованому середовищі.", "Назви прапорців агентів залежать від версії — перевіряй `--help`.", "Після сесії: `git status` → `git diff --stat` → `git diff` → коміт або відкат.", "`git restore .` відкидає зміни у відстежуваних файлах без Undo; нові файли — `git clean -n`, потім `git clean -fd`; `git switch` незакомічені зміни не відкочує."] }
       ],
       glossary: [
         { term: "Режим підтверджень", def: "Агент питає дозволу перед зміною файлів і запуском команд." },

@@ -10,7 +10,7 @@ const ROUTER = "10.0.0.254";
 // Пункти чекліста: [команда, підказка українською]. Підказка — також питання тест-режиму, тому вона однозначна.
 const MODULE_LIST = [
   { id: "basics", title: "1. Основи терміналу", intro: "Де я, хто я, shell, PATH і довідка — фундамент перед усім іншим.", commands: [
-    ["echo $SHELL", "Показати шлях до поточної оболонки (на Mac — /bin/zsh)."],
+    ["echo $SHELL", "Показати оболонку входу користувача (на Mac — /bin/zsh)."],
     ["whoami", "Показати ім'я поточного користувача macOS."],
     ["hostname", "Показати мережеве ім'я цього Mac."],
     ["pwd", "Показати повний шлях до папки, в якій ти зараз (print working directory)."],
@@ -76,7 +76,8 @@ const MODULE_LIST = [
   { id: "ssh", title: "5. SSH та MikroTik", intro: "Pre-check, SSH до роутера, бекап через scp, ключ ed25519 і його імпорт у RouterOS.", commands: [
     ["ping -c 3 10.0.0.254", "Перевірити, чи відповідає роутер 10.0.0.254 (3 пакети)."],
     ["ssh Stas@10.0.0.254", "Підключитися по SSH до роутера 10.0.0.254 як Stas."],
-    ["/export file=backup", "На роутері: зберегти конфігурацію у файл backup.rsc."],
+    ["/export file=backup", "На роутері: зберегти конфігурацію текстом у файл backup.rsc."],
+    ["/system backup save name=full", "На роутері: зробити повний бінарний бекап full.backup (з паролями — для того самого роутера)."],
     ["/quit", "На роутері: завершити SSH-сесію RouterOS."],
     ["scp Stas@10.0.0.254:backup.rsc .", "Завантажити backup.rsc з роутера в поточну папку Mac."],
     ["ssh-keygen -t ed25519", "Згенерувати пару SSH-ключів типу ed25519."],
@@ -176,8 +177,9 @@ const ALIASES = {
   "echo hello | tr 'a-z' 'A-Z'": ["echo hello | tr a-z A-Z", "echo hello | tr \"a-z\" \"A-Z\""],
   "mdfind -name readme": ["mdfind -name \"readme\"", "mdfind -name 'readme'"],
   "cat readme.md | pbcopy": ["pbcopy < readme.md"],
-  "ping -c 3 8.8.8.8": ["ping 8.8.8.8 -c 3"],
-  "ping -c 3 10.0.0.254": ["ping 10.0.0.254 -c 3"],
+  "ping -c 3 8.8.8.8": ["ping 8.8.8.8 -c 3", "ping -c3 8.8.8.8", "ping 8.8.8.8 -c3"],
+  "ping -c 3 10.0.0.254": ["ping 10.0.0.254 -c 3", "ping -c3 10.0.0.254", "ping 10.0.0.254 -c3"],
+  "lsof -i :3000": ["lsof -i:3000", "lsof -i tcp:3000", "lsof -P -i :3000", "lsof -P -i:3000"],
   "git commit -m \"message\"": ["git commit -m 'message'", "git commit -m message"],
   "git add .": ["git add -A", "git add --all"],
   "git diff --staged": ["git diff --cached"],
@@ -186,6 +188,7 @@ const ALIASES = {
   "/quit": ["quit"],
   "/user ssh-keys print": ["user ssh-keys print"],
   "/export file=backup": ["export file=backup"],
+  "/system backup save name=full": ["system backup save name=full"],
   "/user ssh-keys import public-key-file=id_ed25519.pub user=Stas": ["user ssh-keys import public-key-file=id_ed25519.pub user=Stas", "/user ssh-keys import user=Stas public-key-file=id_ed25519.pub"],
   "pip install requests": ["pip3 install requests", "python3 -m pip install requests"],
   "python3 --version": ["python3 -V"],
@@ -210,7 +213,7 @@ function normalizeCommand(s, caseInsensitive) {
   return caseInsensitive ? s.toLowerCase() : s;
 }
 // RouterOS (команди на роутері починаються з /) — регістронезалежний.
-function isRouterOS(listed) { return /^\/|^(quit|user |export )/.test(String(listed).trim()); }
+function isRouterOS(listed) { return /^\/|^(quit|user |export |system )/.test(String(listed).trim()); }
 function matches(input, listed) {
   const ci = isRouterOS(listed);
   const a = normalizeCommand(input, ci);
@@ -223,7 +226,39 @@ function allCommands() {
   MODULE_LIST.forEach(m => m.commands.forEach(c => { if (!seen.has(c[0])) { seen.add(c[0]); out.push(c[0]); } }));
   return out;
 }
-window.TRAINER = { commands: allCommands, matches: matches };
+// recognizes: сухий прогін тієї ж логіки розбору (runZsh / handleRouter) без побічних ефектів.
+let DRY = false;
+function snapshotSim() {
+  const g = SIM.git;
+  return { sim: Object.assign({}, SIM, { dirs: new Set(SIM.dirs), files: new Map(SIM.files), router: new Set(SIM.router),
+    routerKeys: SIM.routerKeys.slice(), brewInstalled: SIM.brewInstalled.slice(),
+    git: g && Object.assign({}, g, { branches: g.branches.slice(), modified: new Set(g.modified), staged: new Set(g.staged), untracked: new Set(g.untracked),
+      tracked: new Set(g.tracked), orig: new Map(g.orig), stash: g.stash.slice(), commits: g.commits.slice() }) }),
+    paths: Object.assign({}, PATHS), chunks: viewChunks };
+}
+function restoreSim(snap) {
+  Object.keys(SIM).forEach(k => { if (!(k in snap.sim)) delete SIM[k]; });
+  Object.assign(SIM, snap.sim);
+  Object.keys(PATHS).forEach(k => { if (!(k in snap.paths)) delete PATHS[k]; });
+  Object.assign(PATHS, snap.paths);
+  viewChunks = snap.chunks;
+}
+function dryRun(fn, cmd, sshMode) {
+  const snap = snapshotSim();
+  DRY = true; viewChunks = [];
+  try { SIM.ssh = sshMode; return fn(cmd) !== false; }
+  catch (e) { return false; }
+  finally { DRY = false; restoreSim(snap); }
+}
+function recognizes(cmd) {
+  const c = String(cmd || "").trim();
+  if (!c) return false;
+  if (dryRun(runZsh, c, false) || dryRun(handleRouter, c, true)) return true;
+  // Рядок шпаргалки «a / b» — кілька альтернативних команд: кожна має розпізнаватися.
+  const alts = c.split(" / ");
+  return alts.length > 1 && alts.every(x => recognizes(x));
+}
+window.TRAINER = { commands: allCommands, matches: matches, recognizes: recognizes };
 
 /* ---------- стан емулятора ---------- */
 const SIM = {
@@ -264,8 +299,12 @@ function initFS() {
   ]);
   SIM.cwd = DEMO; SIM.ssh = false; SIM.venv = false;
   SIM.router = new Set(); SIM.routerKeys = [];
-  SIM.git = { branch: "main", branches: ["main", "feature"], modified: new Set(["readme.md", "file.txt"]), staged: new Set(),
+  const tracked = [...SIM.files.keys()].map(repoRel).filter(r => r && !gitIgnored(r));
+  SIM.git = { branch: "main", branches: ["main", "feature"], modified: new Set(["readme.md", "file.txt"]), staged: new Set(), untracked: new Set(),
+    tracked: new Set(tracked), orig: new Map(tracked.map(r => [r, SIM.files.get(DEMO + "/" + r)])), stash: [],
     commits: [{ hash: "3f9c2e1", msg: "Add readme" }, { hash: "a1b2c3d", msg: "Initial commit" }] };
+  SIM.git.orig.set("readme.md", "# Demo\nНавчальний проєкт для тренажера.\n");
+  SIM.git.orig.set("file.txt", "hello\n");
   SIM.clipboard = "текст з буфера";
   SIM.nodeRunning = true;
   SIM.exec = false;
@@ -309,7 +348,24 @@ function removeTree(abs) {
 }
 function inRepo() { return SIM.cwd === DEMO || SIM.cwd.startsWith(DEMO + "/"); }
 function repoRel(abs) { return abs.startsWith(DEMO + "/") ? abs.slice(DEMO.length + 1) : null; }
-function touchRepo(abs) { const r = repoRel(abs); if (r && !r.startsWith(".git") && !r.startsWith("build/") && !r.startsWith(".venv")) SIM.git.modified.add(r); }
+function gitIgnored(r) { return /^(\.git|build|\.venv|node_modules)(\/|$)/.test(r); }
+// Git бачить зміну відстежуваного файлу як modified/deleted, новий файл — як untracked.
+function touchRepo(abs) {
+  const r = repoRel(abs), g = SIM.git;
+  if (!r || gitIgnored(r)) return;
+  const under = x => x === r || x.startsWith(r + "/");
+  const affected = [...g.tracked].filter(under);
+  if (affected.length) { affected.forEach(t => g.modified.add(t)); return; }
+  if (isFile(abs)) { g.untracked.add(r); return; }
+  [...g.untracked].filter(under).forEach(u => g.untracked.delete(u));
+  [...g.staged].filter(x => under(x) && !g.tracked.has(x)).forEach(x => g.staged.delete(x));
+}
+function gitLabel(f) { return !SIM.git.tracked.has(f) ? "new file:  " : isFile(DEMO + "/" + f) ? "modified:  " : "deleted:   "; }
+function gitRestoreFile(f) {
+  const g = SIM.git, abs = DEMO + "/" + f;
+  let p = parentOf(abs); while (!isDir(p)) { SIM.dirs.add(p); p = parentOf(p); }
+  SIM.files.set(abs, g.orig.get(f)); g.modified.delete(f);
+}
 
 /* ---------- стан інтерфейсу ---------- */
 const state = {
@@ -367,6 +423,7 @@ function printResult(title, body, type = "ok", hint = null) {
 function out(lines, cls = "line-ok") { return `<pre class="${cls}">${esc(Array.isArray(lines) ? lines.join("\n") : lines)}</pre>`; }
 // Scrollback: кожна команда — окремий запис; тримаємо останні MAX_ENTRIES.
 function flushView(status, replace) {
+  if (DRY) return;
   const entry = document.createElement("div");
   entry.className = "entry";
   entry.innerHTML = viewChunks.join("");
@@ -378,6 +435,7 @@ function flushView(status, replace) {
 }
 
 function updatePrompt() {
+  if (DRY) return;
   let label;
   if (SIM.ssh) label = `[${SIM.user}@MikroTik] >`;
   else {
@@ -437,6 +495,7 @@ function switchModule(id, showWelcome = true) {
 }
 
 function welcome() {
+  if (DRY) return;
   beginView(null);
   print(`<span class="line-muted">Mac Terminal Trainer — емуляція zsh (без реального виконання)</span>`);
   printResult("Почни з розділу «Основи терміналу»", `
@@ -469,12 +528,24 @@ function handleRouter(cmd) {
     printResult(cmd, out(["interrupted", `Connection to ${ROUTER} closed.`]), "ok", "Ти знову в zsh на своєму Mac.");
     return true;
   }
-  if (k === "/export file=backup") {
-    SIM.router.add("backup.rsc");
-    printResult(cmd, out("(конфігурацію збережено у файл backup.rsc на роутері)", "line-muted"), "ok", "Тепер вийди (/quit) і забери файл з Mac: scp Stas@10.0.0.254:backup.rsc .");
+  const exp = k.match(/^\/export( show-sensitive)?(?: file=(\S+))?$/);
+  if (exp && exp[2]) {
+    const f = exp[2].replace(/\.rsc$/, "") + ".rsc";
+    SIM.router.add(f);
+    printResult(cmd, out(`(конфігурацію збережено текстом у файл ${f} на роутері)`, "line-muted"), "ok",
+      (exp[1] ? "show-sensitive: у файлі відкриті секрети (паролі Wi-Fi, ключі тощо) — зберігай його як пароль. " : "Секрети (паролі Wi-Fi тощо) у файлі приховано; паролів користувачів і SSH-ключів export не містить узагалі — для них /system backup save. ") +
+      `Тепер вийди (/quit) і забери файл з Mac: scp Stas@10.0.0.254:${f} .`);
     return true;
   }
-  if (k === "/export") {
+  const bk = k.match(/^\/system backup save(?: name=(\S+))?/);
+  if (bk) {
+    const f = (bk[1] || "MikroTik").replace(/\.backup$/, "") + ".backup";
+    SIM.router.add(f);
+    printResult(cmd, out(["Saving system configuration", "Configuration backup saved"]), "ok",
+      `Бінарний повний бекап ${f} (з користувачами й паролями) — для відновлення на цьому ж роутері, бажано тієї ж версії RouterOS. Містить секрети. Забрати: /quit → scp Stas@10.0.0.254:${f} .`);
+    return true;
+  }
+  if (exp) {
     printResult(cmd, out(["# 2026-09-18 10:12:03 by RouterOS 7.x", "/interface bridge", "add name=bridge", "/ip address", `add address=${ROUTER}/24 interface=bridge`]), "ok", "Експорт на екран. Щоб зберегти у файл: /export file=backup");
     return true;
   }
@@ -547,6 +618,99 @@ function globRe(g) { return new RegExp("^" + g.replace(/[.+^${}()|[\]\\]/g, "\\$
 function findByName(dir, pattern) { const re = globRe(pattern); return subtree(dir).filter(p => isFile(p) && re.test(baseOf(p)) && !p.includes("/.git/")); }
 function requireRepo(fn) { return inRepo() ? fn() : out("fatal: not a git repository (or any of the parent directories): .git", "line-err"); }
 
+/* ---------- конвеєри: джерело | фільтр | … ---------- */
+const HOSTS = { "google.com": "142.250.186.78", "github.com": "140.82.121.4", "example.com": "93.184.215.14" };
+function expandVars(v) {
+  const map = { "$SHELL": SIM.shell, "$HOME": HOME, "$PATH": PATH_VALUE, "$USER": SIM.user, "$0": "-zsh", "$$": "1234" };
+  return v.replace(/\$([A-Z]+|0|\$)/g, m => map[m] != null ? map[m] : "");
+}
+function historyLines() { return state.history.map((h, i) => `${String(i + 1).padStart(5)}  ${h}`); }
+function psLines() {
+  return ["USER   PID  %CPU %MEM      VSZ    RSS   TT  STAT STARTED      TIME COMMAND", "root     1   0.0  0.1 410112  13200   ??  Ss    9:00AM   0:21.04 /sbin/launchd"]
+    .concat(SIM.nodeRunning ? ["Stas  4242   0.3  0.9 412345  75120 s001  S+   10:02AM   0:03.21 node /Users/Stas/Projects/demo/node_modules/.bin/vite"] : [])
+    .concat(["Stas  1234   0.0  0.0 408512   2400 s000  Ss   10:00AM   0:00.05 -zsh"]);
+}
+function findArgs(args) {
+  const start = args[0] && !args[0].startsWith("-") ? args[0] : ".";
+  const i = args.indexOf("-name");
+  const root = resolvePath(start);
+  if (!isDir(root)) return { err: `find: ${start}: No such file or directory` };
+  const res = i >= 0 && args[i + 1] ? findByName(root, args[i + 1]) : subtree(root);
+  const pref = start.replace(/\/$/, "");
+  return { lines: res.map(p => pref + p.slice(root.length)) };
+}
+function pipeSource(seg) {
+  const t = tokenize(seg), n = t[0], a = t.slice(1), rest = a.filter(x => !x.startsWith("-"));
+  switch (n) {
+    case "cat": case "sort": {
+      const f = rest[0]; if (!f) return null;
+      const abs = resolvePath(f);
+      if (!isFile(abs)) return { err: `${n}: ${f}: No such file or directory` };
+      return { lines: n === "sort" ? sortedLines(abs) : fileLines(abs) };
+    }
+    case "find": return findArgs(a);
+    case "history": return { lines: historyLines() };
+    case "echo": return { lines: [expandVars(a.join(" "))] };
+    case "ps": return a.join(" ") === "aux" ? { lines: psLines() } : null;
+    case "ls": return { lines: children(SIM.cwd).filter(x => !x.startsWith(".")) };
+    case "netstat": return a.join(" ") === "-an" ? { lines: ["Active Internet connections (including servers)", "tcp4       0      0  10.0.0.42.52144        140.82.121.4.443       ESTABLISHED", "tcp4       0      0  *.3000                 *.*                    LISTEN", "tcp4       0      0  127.0.0.1.631          *.*                    LISTEN"] } : null;
+    case "launchctl": return a[0] === "list" ? { lines: ["PID\tStatus\tLabel", "-\t0\tcom.stas.backup", "412\t0\tcom.apple.Finder"] } : null;
+    case "pbpaste": return { lines: SIM.clipboard.replace(/\n$/, "").split("\n") };
+  }
+  return null;
+}
+function pipeFilter(lines, seg) {
+  const t = tokenize(seg), n = t[0], a = t.slice(1), { flags, rest } = splitFlags(a);
+  const num = () => { const f = a.find(x => /^-\d+$/.test(x)); const i = a.indexOf("-n"); return f ? +f.slice(1) : i >= 0 ? +a[i + 1] : 10; };
+  switch (n) {
+    case "grep": {
+      if (!rest[0]) return null;
+      const re = new RegExp(rest[0].replace(/[.+^${}()|[\]\\*?]/g, "\\$&"), flags.has("i") ? "i" : "");
+      return { lines: lines.map((l, k) => [l, k]).filter(([l]) => re.test(l) !== flags.has("v")).map(([l, k]) => (flags.has("n") ? (k + 1) + ":" : "") + l) };
+    }
+    case "wc": return flags.has("l") ? { lines: [String(lines.length).padStart(8)] } : null;
+    case "sort": { const r = lines.slice().sort((x, y) => x.localeCompare(y)); return { lines: flags.has("r") ? r.reverse() : r }; }
+    case "uniq": {
+      const groups = [];
+      lines.forEach(l => { const g = groups[groups.length - 1]; if (g && g[0] === l) g[1]++; else groups.push([l, 1]); });
+      return { lines: groups.map(([l, c]) => flags.has("c") ? `${String(c).padStart(4)} ${l}` : l) };
+    }
+    case "head": return { lines: lines.slice(0, num()) };
+    case "tail": return { lines: lines.slice(-num()) };
+    case "pbcopy": SIM.clipboard = lines.join("\n") + "\n"; return { lines: [], note: "(нічого не виведено — текст уже в буфері обміну; перевір: pbpaste)" };
+    case "xargs": {
+      if (a.join(" ") === "wc -l") {
+        let total = 0;
+        const rows = lines.map(p => { const n2 = isFile(resolvePath(p)) ? fileLines(resolvePath(p)).length : 0; total += n2; return `${String(n2).padStart(8)} ${p}`; });
+        if (lines.length > 1) rows.push(`${String(total).padStart(8)} total`);
+        return { lines: rows };
+      }
+      if (a[0] === "rm") return { danger: lines };
+      return null;
+    }
+  }
+  return null;
+}
+function runPipeline(raw) {
+  const segs = raw.split("|").map(x => x.trim());
+  if (segs.some(x => !x)) return null;
+  let cur = pipeSource(segs[0]);
+  if (!cur) return null;
+  if (cur.err) return { html: out(cur.err, "line-err"), type: "warn" };
+  for (const seg of segs.slice(1)) {
+    const nx = pipeFilter(cur.lines, seg);
+    if (!nx) return null;
+    if (nx.danger) {
+      const list = nx.danger.length ? nx.danger : ["(список порожній)"];
+      return { html: `<span class="line-err">⚠ Тренажер не виконує масове видалення через xargs rm.</span>` + out(["Файли, які було б видалено назавжди (без Кошика):"].concat(list), "line-warn"),
+        type: "danger", hint: "Спершу завжди запускай ліву частину окремо (find …) і читай список; назви з пробілами xargs розріже на частини. Безпечніше: find … -print, потім trash або rm для конкретних файлів." };
+    }
+    cur = nx;
+  }
+  if (cur.note) return { html: out(cur.note, "line-muted") };
+  return { html: cur.lines.length ? out(cur.lines) : out("(нічого не знайдено — код виходу 1, це не помилка)", "line-muted") };
+}
+
 function lsLong(dir, all) {
   const names = children(dir).filter(n => all || !n.startsWith("."));
   const rows = (all ? [".", ".."] : []).concat(names).map(n => {
@@ -565,6 +729,16 @@ function runZsh(cmd) {
   const hint = UK_HINTS[canon] || null;
   if (CANNED[canon]) { printResult(raw, CANNED[canon](), "ok", hint); return true; }
 
+  // перенаправлення pbpaste > / >>
+  const pb = raw.match(/^pbpaste\s*(>>|>)\s*(\S+)$/);
+  if (pb) {
+    const abs = resolvePath(pb[2]);
+    if (!isDir(parentOf(abs))) { printResult(raw, out(`zsh: no such file or directory: ${pb[2]}`, "line-err"), "warn"); return true; }
+    const had = isFile(abs);
+    SIM.files.set(abs, (pb[1] === ">>" ? (SIM.files.get(abs) || "") : "") + SIM.clipboard.replace(/\n$/, "") + "\n"); touchRepo(abs);
+    printResult(raw, out(`(вміст буфера ${pb[1] === ">" ? "записано в" : "дописано до"} ${pb[2]}${pb[1] === ">" && had ? "; старий вміст стерто" : ""})`, "line-muted"), pb[1] === ">" ? "warn" : "ok");
+    return true;
+  }
   // перенаправлення echo > / >>
   const redir = raw.match(/^echo\s+(.+?)\s*(>>|>)\s*(\S+)$/);
   if (redir) {
@@ -581,9 +755,19 @@ function runZsh(cmd) {
     printResult(raw, `<span class="line-err">⚠ Тренажер не виконує «завантажити й одразу запустити».</span><br><span class="line-muted">Скрипт з інтернету отримав би всі твої права без перевірки. Безпечно: curl -fsSL URL -o install.sh → less install.sh → лише потім bash install.sh.</span>`, "danger");
     return true;
   }
+  if (/\s&&\s/.test(raw)) {
+    // a && b: наступна команда — лише якщо попередня розпізнана й успішна.
+    for (const part of raw.split(/\s+&&\s+/)) { if (!part.trim() || runZsh(part) === false) return false; }
+    return true;
+  }
   if (raw.includes("|")) {
-    printResult("Конвеєр не емулюється", `<span class="line-muted">Тренажер знає лише конвеєри з розділів. Спробуй команду зі списку зліва.</span>`, "warn");
-    return false;
+    const res = runPipeline(raw);
+    if (!res) {
+      printResult("Конвеєр не емулюється", `<span class="line-muted">Тренажер не знає однієї з команд цього конвеєра. Спробуй команду зі списку зліва.</span>`, "warn");
+      return false;
+    }
+    printResult(raw, res.html, res.type || "ok", res.hint || hint);
+    return true;
   }
 
   if (/^\//.test(raw) || MODULES.ssh.commands.some(c => c.startsWith("/") && matches(raw, c))) {
@@ -597,8 +781,13 @@ function runZsh(cmd) {
   switch (name) {
     case "echo": {
       const v = args.join(" ");
-      const map = { "$SHELL": SIM.shell, "$HOME": HOME, "$PATH": PATH_VALUE, "$USER": SIM.user };
-      return H(raw, out(v.replace(/\$[A-Z]+/g, m => map[m] != null ? map[m] : "")));
+      const h = v === "$0" ? "Ім'я поточної оболонки; дефіс на початку означає оболонку входу (login shell)." : v === "$SHELL" ? (hint || "") + " Це оболонка входу з налаштувань користувача; поточну покаже echo $0 або ps -p $$." : hint;
+      return H(raw, out(expandVars(v)), "ok", h);
+    }
+    case "ps": {
+      if (args[0] === "-p" && (args[1] === "$$" || args[1] === "1234")) return H(raw, out(["  PID TTY           TIME CMD", " 1234 ttys000    0:00.05 -zsh"]), "ok", "$$ — PID поточної оболонки; у колонці CMD видно, що це zsh.");
+      if (args.join(" ") === "aux") return H(raw, out(psLines()), "ok", "Довгий список — зазвичай фільтрують: ps aux | grep node");
+      break;
     }
     case "whoami": return H(raw, out(SIM.user));
     case "hostname": return H(raw, out(SIM.host + ".local"));
@@ -694,6 +883,21 @@ function runZsh(cmd) {
       return H(raw, body || out("(нічого не сталося: -f мовчить, навіть коли файлу немає)", "line-muted"), type,
         hint || (recursive ? "rm -r видаляє папку з усім вмістом. Перед цим: pwd і ls." : "rm видаляє файл без кошика."));
     }
+    case "trash": {
+      const files = args.filter(x => !x.startsWith("-"));
+      if (!files.length) return H(raw, out("usage: trash [-h] [-v] [-s] FILE [FILE...]", "line-err"), "warn");
+      const errs = [];
+      SIM.dirs.add(HOME + "/.Trash");
+      files.forEach(n => {
+        const abs = resolvePath(n);
+        if (!exists(abs)) { errs.push(`trash: ${n}: No such file or directory`); return; }
+        const dst = HOME + "/.Trash/" + baseOf(abs);
+        subtree(abs).concat(abs).forEach(p => { const np = dst + p.slice(abs.length); if (isDir(p)) SIM.dirs.add(np); else SIM.files.set(np, SIM.files.get(p)); });
+        removeTree(abs); touchRepo(abs);
+      });
+      return H(raw, (files.length > errs.length ? out("(переміщено в Кошик — відновити можна у Finder: Кошик → «Повернути»)", "line-muted") : "") + (errs.length ? out(errs, "line-err") : ""), errs.length ? "warn" : "ok",
+        hint || "trash вбудована в macOS 15 і новіші; на старіших — mv папка ~/.Trash/");
+    }
     case "rmdir": {
       const abs = resolvePath(rest[0] || "");
       if (!isDir(abs)) return H(raw, notFound("rmdir", rest[0] || ""), "warn");
@@ -719,13 +923,9 @@ function runZsh(cmd) {
       return H(raw, out(lines) + extra);
     }
     case "find": {
-      const start = args[0] && !args[0].startsWith("-") ? args[0] : ".";
-      const i = args.indexOf("-name");
-      const root = resolvePath(start);
-      if (!isDir(root)) return H(raw, notFound("find", start), "warn");
-      const res = i >= 0 && args[i + 1] ? findByName(root, args[i + 1]) : subtree(root);
-      const pref = start.replace(/\/$/, "");
-      return H(raw, res.length ? out(res.map(p => pref + p.slice(root.length))) : out("(нічого не знайдено)", "line-muted"));
+      const r = findArgs(args);
+      if (r.err) return H(raw, out(r.err, "line-err"), "warn");
+      return H(raw, r.lines.length ? out(r.lines) : out("(нічого не знайдено)", "line-muted"));
     }
     case "grep": {
       if (!rest.length) break;
@@ -764,16 +964,29 @@ function runZsh(cmd) {
 
     // мережа
     case "ping": {
-      const host = rest[rest.length - 1];
+      let host = null, c = null;
+      for (let i = 0; i < args.length; i++) {
+        const x = args[i];
+        if (x === "-c") c = args[++i];
+        else if (/^-c\d+$/.test(x)) c = x.slice(2);
+        else if (/^-[iWtsS]$/.test(x)) i++;
+        else if (!x.startsWith("-") && !host) host = x;
+      }
       if (!host) break;
-      const ip = host === "google.com" ? "142.250.186.78" : host;
-      const c = args.indexOf("-c") >= 0 ? +args[args.indexOf("-c") + 1] || 3 : 4;
+      if (c !== null && !(/^\d+$/.test(String(c)) && +c > 0)) return H(raw, out(`ping: invalid count of packets to transmit: \`${c == null ? "" : c}'`, "line-err"), "warn");
+      const ip = HOSTS[host] || (/^\d+\.\d+\.\d+\.\d+$/.test(host) ? host : null);
+      if (!ip) return H(raw, out(`ping: cannot resolve ${host}: Unknown host`, "line-err"), "warn");
+      c = c === null ? 4 : +c;
       const rows = [`PING ${host} (${ip}): 56 data bytes`];
       for (let k = 0; k < Math.min(c, 5); k++) rows.push(`64 bytes from ${ip}: icmp_seq=${k} ttl=${ip === ROUTER ? 64 : 117} time=${((ip === ROUTER ? 2.1 : 14.3) + k * 0.4).toFixed(3)} ms`);
       rows.push("", `--- ${host} ping statistics ---`, `${c} packets transmitted, ${c} packets received, 0.0% packet loss`);
-      return H(raw, out(rows) + (args.indexOf("-c") < 0 ? out("(без -c ping на Mac працює безкінечно — зупиняють Ctrl+C)", "line-warn") : ""));
+      return H(raw, out(rows) + (!/(^|\s)-c/.test(args.join(" ")) ? out("(без -c ping на Mac працює безкінечно — зупиняють Ctrl+C)", "line-warn") : ""));
     }
-    case "traceroute": return H(raw, out([`traceroute to ${args[0]} (142.250.186.78), 64 hops max, 40 byte packets`, ` 1  ${ROUTER} (${ROUTER})  2.104 ms  1.873 ms  1.902 ms`, " 2  100.64.0.1 (100.64.0.1)  6.311 ms  5.998 ms  6.120 ms", " 3  * * *", " 4  142.250.186.78 (142.250.186.78)  14.512 ms  14.301 ms  14.466 ms"]));
+    case "traceroute": {
+      const host = rest[0]; if (!host) break;
+      const ip = HOSTS[host] || host;
+      return H(raw, out([`traceroute to ${host} (${ip}), 64 hops max, 40 byte packets`, ` 1  ${ROUTER} (${ROUTER})  2.104 ms  1.873 ms  1.902 ms`, " 2  100.64.0.1 (100.64.0.1)  6.311 ms  5.998 ms  6.120 ms", " 3  * * *", ` 4  ${ip} (${ip})  14.512 ms  14.301 ms  14.466 ms`]));
+    }
     case "route": {
       if (args.join(" ") !== "get default") break;
       return H(raw, out(["   route to: default", "destination: default", "       mask: default", `    gateway: ${ROUTER}`, "  interface: en0", "      flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>"]));
@@ -791,11 +1004,19 @@ function runZsh(cmd) {
       break;
     }
     case "dig": {
-      if (!args[0]) break;
-      if (args.includes("+short")) return H(raw, out("142.250.186.78"));
-      return H(raw, out(["; <<>> DiG 9.10.6 <<>> " + args[0], ";; ANSWER SECTION:", `${args[0]}.\t\t183\tIN\tA\t142.250.186.78`, "", ";; Query time: 18 msec", `;; SERVER: ${ROUTER}#53(${ROUTER})`]));
+      const host = args.find(x => !/^[+@-]/.test(x));
+      if (!host) break;
+      const ip = HOSTS[host];
+      if (args.includes("+short")) return H(raw, ip ? out(ip) : out("(порожньо — такого імені немає)", "line-muted"));
+      if (!ip) return H(raw, out(["; <<>> DiG 9.10.6 <<>> " + host, ";; ->>HEADER<<- opcode: QUERY, status: NXDOMAIN", `;; SERVER: ${ROUTER}#53(${ROUTER})`]), "warn", "NXDOMAIN — DNS каже, що такого імені не існує. Перевір написання.");
+      return H(raw, out(["; <<>> DiG 9.10.6 <<>> " + host, ";; ->>HEADER<<- opcode: QUERY, status: NOERROR", ";; ANSWER SECTION:", `${host}.\t\t183\tIN\tA\t${ip}`, "", ";; Query time: 18 msec", `;; SERVER: ${ROUTER}#53(${ROUTER})`]));
     }
-    case "nslookup": return H(raw, out([`Server:\t\t${ROUTER}`, `Address:\t${ROUTER}#53`, "", "Non-authoritative answer:", `Name:\t${args[0]}`, "Address: 142.250.186.78"]));
+    case "nslookup": {
+      const host = rest[0]; if (!host) break;
+      const ip = HOSTS[host];
+      if (!ip) return H(raw, out([`Server:\t\t${ROUTER}`, `Address:\t${ROUTER}#53`, "", `** server can't find ${host}: NXDOMAIN`], "line-err"), "warn");
+      return H(raw, out([`Server:\t\t${ROUTER}`, `Address:\t${ROUTER}#53`, "", "Non-authoritative answer:", `Name:\t${host}`, `Address: ${ip}`]));
+    }
     case "curl": {
       const o = args.indexOf("-o");
       if (o >= 0 && args[o + 1]) {
@@ -808,7 +1029,10 @@ function runZsh(cmd) {
     }
     case "netstat": return H(raw, out("(дуже довгий список — відфільтруй: netstat -an | grep LISTEN)", "line-muted"));
     case "lsof": {
-      if (args[0] === "-i" && args[1] === ":3000") {
+      const j = args.join(" ").replace(/-i\s+/, "-i");
+      const port = (j.match(/-i(?:tcp)?:(\d+)/i) || [])[1];
+      if (port && port !== "3000") return H(raw, out("(порожньо — порт вільний; код виходу 1)", "line-muted"));
+      if (port) {
         return H(raw, SIM.nodeRunning
           ? out(["COMMAND  PID USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME", "node    4242 Stas   23u  IPv6 0x3c1f2a9b7d6e5f41      0t0  TCP *:hbci (LISTEN)"])
           : out("(порожньо — порт 3000 вільний)", "line-muted"), "ok", (hint || "") + " hbci — «ім'я» порту 3000 з /etc/services; з прапорцем -P lsof показує число.");
@@ -853,7 +1077,7 @@ function runZsh(cmd) {
         const f = src.slice(remote.length);
         if (!SIM.router.has(f)) return H(raw, out(`scp: ${f}: No such file or directory`, "line-err"), "warn", "Спершу створи файл на роутері: ssh Stas@10.0.0.254 → /export file=backup → /quit");
         let abs = resolvePath(dst); if (isDir(abs)) abs = abs + "/" + f;
-        SIM.files.set(abs, "# RouterOS export (емуляція)\n/ip address\nadd address=10.0.0.254/24 interface=bridge\n");
+        SIM.files.set(abs, f.endsWith(".backup") ? "(бінарний бекап RouterOS — не редагувати)\n" : "# RouterOS export (емуляція)\n/ip address\nadd address=10.0.0.254/24 interface=bridge\n");
         return H(raw, out(`${f}                                   100% 4213    1.1MB/s   00:00`));
       }
       break;
@@ -867,9 +1091,10 @@ function runZsh(cmd) {
       const g = SIM.git;
       if (sub === "status") {
         const rows = [`On branch ${g.branch}`];
-        if (g.staged.size) rows.push("Changes to be committed:", ...[...g.staged].map(f => `\tmodified:   ${f}`));
-        if (g.modified.size) rows.push("Changes not staged for commit:", "  (use \"git add <file>...\" to update what will be committed)", "  (use \"git restore <file>...\" to discard changes in working directory)", ...[...g.modified].map(f => `\tmodified:   ${f}`));
-        if (!g.staged.size && !g.modified.size) rows.push("nothing to commit, working tree clean");
+        if (g.staged.size) rows.push("Changes to be committed:", ...[...g.staged].map(f => `\t${gitLabel(f)} ${f}`));
+        if (g.modified.size) rows.push("Changes not staged for commit:", "  (use \"git add <file>...\" to update what will be committed)", "  (use \"git restore <file>...\" to discard changes in working directory)", ...[...g.modified].map(f => `\t${gitLabel(f)} ${f}`));
+        if (g.untracked.size) rows.push("Untracked files:", "  (use \"git add <file>...\" to include in what will be committed)", ...[...g.untracked].map(f => `\t${f}`));
+        if (!g.staged.size && !g.modified.size && !g.untracked.size) rows.push("nothing to commit, working tree clean");
         return H(raw, out(rows));
       }
       if (sub === "diff") {
@@ -878,8 +1103,8 @@ function runZsh(cmd) {
         return H(raw, out([...set].flatMap(f => [`diff --git a/${f} b/${f}`, `--- a/${f}`, `+++ b/${f}`, "@@ -1,2 +1,2 @@", "-старий рядок", "+змінений рядок"])));
       }
       if (sub === "add") {
-        if (a === "." || a === "-A" || a === "--all") { g.modified.forEach(f => g.staged.add(f)); g.modified.clear(); }
-        else if (g.modified.has(a)) { g.modified.delete(a); g.staged.add(a); }
+        if (a === "." || a === "-A" || a === "--all") { g.modified.forEach(f => g.staged.add(f)); g.untracked.forEach(f => g.staged.add(f)); g.modified.clear(); g.untracked.clear(); }
+        else if (g.modified.has(a) || g.untracked.has(a)) { g.modified.delete(a); g.untracked.delete(a); g.staged.add(a); }
         else return H(raw, out(`fatal: pathspec '${a}' did not match any files`, "line-err"), "warn");
         return H(raw, out("(зміни підготовлено — git status покаже їх як «to be committed»)", "line-muted"));
       }
@@ -890,10 +1115,20 @@ function runZsh(cmd) {
         const msg = m[1] || m[2] || m[3];
         const hash = Math.random().toString(16).slice(2, 9);
         g.commits.unshift({ hash, msg });
-        const n = g.staged.size; g.staged.clear();
+        const n = g.staged.size;
+        g.staged.forEach(f => { const ab = DEMO + "/" + f; if (isFile(ab)) { g.tracked.add(f); g.orig.set(f, SIM.files.get(ab)); } else { g.tracked.delete(f); g.orig.delete(f); } });
+        g.staged.clear();
         return H(raw, out([`[${g.branch} ${hash}] ${msg}`, ` ${n} file${n > 1 ? "s" : ""} changed`]));
       }
       if (sub === "log") return H(raw, out(g.commits.map(c => `${c.hash} ${c.msg}`)));
+      if (sub === "branch" && (args[1] === "-d" || args[1] === "-D")) {
+        const br = args[2]; if (!br) break;
+        if (!g.branches.includes(br)) return H(raw, out(`error: branch '${br}' not found`, "line-err"), "warn");
+        if (br === g.branch) return H(raw, out(`error: cannot delete branch '${br}' used by worktree at '${DEMO}'`, "line-err"), "warn", "Спершу перейди на іншу гілку: git switch main");
+        g.branches = g.branches.filter(b => b !== br);
+        return H(raw, out(`Deleted branch ${br} (was ${g.commits[0].hash}).`), args[1] === "-D" ? "danger" : "ok",
+          args[1] === "-D" ? "-D видаляє гілку навіть з незлитими комітами — вони стануть недоступні з гілок (знайти можна лише через git reflog)." : "-d відмовиться видаляти гілку з незлитими комітами (у тренажері гілки вважаються злитими).");
+      }
       if (sub === "branch") return H(raw, out(g.branches.map(b => (b === g.branch ? "* " : "  ") + b)));
       if (sub === "switch" || sub === "checkout") {
         const create = args[1] === "-c" || args[1] === "-b";
@@ -906,22 +1141,54 @@ function runZsh(cmd) {
         }
         if (!g.branches.includes(br)) return H(raw, out(`fatal: invalid reference: ${br}`, "line-err"), "warn", "Такої гілки немає. Створити й перейти: git switch -c " + br);
         g.branch = br;
-        return H(raw, out(`Switched to branch '${br}'`));
+        const dirty = g.modified.size + g.staged.size + g.untracked.size;
+        return H(raw, out([...g.modified].map(f => `M\t${f}`).concat(`Switched to branch '${br}'`)), "ok",
+          dirty ? `Незакомічені зміни (${dirty}) перейшли разом з тобою на ${br}: switch їх не відкочує і не залишає на попередній гілці.` : hint);
       }
       if (sub === "restore") {
         const staged = args[1] === "--staged";
         const f = staged ? args[2] : args[1];
         if (!f) break;
+        if (!staged && f === ".") {
+          const n = g.modified.size;
+          [...g.modified].forEach(gitRestoreFile);
+          return H(raw, n ? out(`(незакомічені зміни в ${n} відстежуваних файлах стерто — їх не повернути)`, "line-err") + (g.untracked.size ? out(`Нові файли не зачеплено: ${[...g.untracked].join(", ")} — див. git clean -n`, "line-muted") : "") : out("(змін у відстежуваних файлах немає — нічого не скасовано)", "line-muted"),
+            n ? "danger" : "ok", "Перед git restore . переглянь git diff; сумніваєшся — git stash -u замість стирання.");
+        }
         if (staged) { if (g.staged.delete(f)) g.modified.add(f); return H(raw, out(`(${f} знято зі staging, зміни у файлі лишились)`, "line-muted")); }
+        if (g.untracked.has(f)) return H(raw, out(`error: pathspec '${f}' did not match any file(s) known to git`, "line-err"), "warn", "Новий (untracked) файл git restore не чіпає — його видаляють окремо, після перевірки.");
         if (!g.modified.has(f)) return H(raw, out("(змін у цьому файлі немає — нічого не скасовано)", "line-muted"));
-        g.modified.delete(f);
+        gitRestoreFile(f);
         return H(raw, out(`(незакомічені зміни у ${f} скасовано — їх не повернути)`, "line-warn"), "warn");
       }
       if (sub === "push") return H(raw, out(["To github.com:StsZu/demo.git", `   ${g.commits[1].hash}..${g.commits[0].hash}  ${g.branch} -> ${g.branch}`]));
       if (sub === "pull") return H(raw, out("Already up to date."));
+      if (sub === "clean") {
+        const fl = args.slice(1).join("");
+        const list = [...g.untracked].sort();
+        if (fl.includes("n")) return H(raw, list.length ? out(list.map(f => `Would remove ${f}`)) : out("(нових файлів немає — нічого не буде видалено)", "line-muted"), "ok", "-n — лише перегляд, нічого не видалено.");
+        if (!fl.includes("f")) return H(raw, out("fatal: clean.requireForce is true and -f not given: refusing to clean", "line-err"), "warn", "Git навмисно вимагає -f. Спершу подивись: git clean -n");
+        list.forEach(f => SIM.files.delete(DEMO + "/" + f)); g.untracked.clear();
+        return H(raw, list.length ? out(list.map(f => `Removing ${f}`), "line-err") : out("(нових файлів немає)", "line-muted"), list.length ? "danger" : "ok", "Видалено назавжди, повз Кошик: Git ці файли не відстежував, тож відновити їх з історії неможливо.");
+      }
       if (sub === "stash") {
-        if (args[1] === "pop") return H(raw, out("(сховані зміни повернуто)", "line-muted"));
-        return H(raw, out(`Saved working directory and index state WIP on ${g.branch}: ${g.commits[0].hash} ${g.commits[0].msg}`));
+        if (args[1] === "pop") {
+          const e = g.stash.shift();
+          if (!e) return H(raw, out("No stash entries found.", "line-err"), "warn");
+          e.files.forEach(([f, c]) => SIM.files.set(DEMO + "/" + f, c));
+          e.modified.forEach(f => g.modified.add(f)); e.untracked.forEach(f => g.untracked.add(f));
+          return H(raw, out("(сховані зміни повернуто — перевір: git status)", "line-muted"));
+        }
+        if (args[1] === "list") return H(raw, g.stash.length ? out(g.stash.map((e, i) => `stash@{${i}}: WIP on ${e.branch}`)) : out("(порожньо)", "line-muted"));
+        const withU = args.includes("-u") || args.includes("--include-untracked");
+        const mods = [...g.modified, ...g.staged], unt = withU ? [...g.untracked] : [];
+        if (!mods.length && !unt.length) return H(raw, out("No local changes to save"));
+        const files = mods.concat(unt).filter(f => isFile(DEMO + "/" + f)).map(f => [f, SIM.files.get(DEMO + "/" + f)]);
+        g.stash.unshift({ branch: g.branch, files, modified: mods, untracked: unt });
+        mods.forEach(f => { if (g.orig.has(f)) gitRestoreFile(f); else SIM.files.delete(DEMO + "/" + f); }); g.staged.clear();
+        unt.forEach(f => { SIM.files.delete(DEMO + "/" + f); g.untracked.delete(f); });
+        return H(raw, out(`Saved working directory and index state WIP on ${g.branch}: ${g.commits[0].hash} ${g.commits[0].msg}`), "ok",
+          withU ? "Сховано і зміни, і нові файли; повернути — git stash pop." : (g.untracked.size ? "Нові (untracked) файли без -u не ховаються — лишились у папці. " : "") + "Повернути — git stash pop.");
       }
       break;
     }
@@ -937,6 +1204,10 @@ function runZsh(cmd) {
       const a = args.join(" ");
       if (a === "--version") return H(raw, out("Homebrew 4.x.x (номер залежить від дати оновлення)"));
       if (a === "update") return H(raw, out(["==> Updating Homebrew...", "Updated 2 taps (homebrew/core and homebrew/cask).", "==> Outdated Formulae", "node   uv"]));
+      if (args[0] === "upgrade" && args[1]) {
+        if (!SIM.brewInstalled.includes(args[1])) return H(raw, out(`Error: ${args[1]} not installed`, "line-err"), "warn");
+        return H(raw, out([`==> Upgrading 1 outdated package:`, args[1] === "node" ? "node 24.6.0 -> 24.8.0" : `${args[1]} x.y.z -> x.y.(z+1)`, `==> Pouring ${args[1]}--….arm64.bottle.tar.gz`]), "warn", "Оновлюється лише цей пакет (і його залежності). Проєкт, що залежить від старої версії, може зламатися.");
+      }
       if (a === "upgrade") return H(raw, out(["==> Upgrading 2 outdated packages:", "node 24.6.0 -> 24.8.0", "uv 0.8.13 -> 0.8.17", "==> Pouring node--24.8.0.arm64.bottle.tar.gz"]), "warn", (hint || "") + " Оновлення може зламати проєкт, що залежить від старої версії.");
       if (a === "list") return H(raw, out(SIM.brewInstalled.join("\n")));
       if (a === "outdated") return H(raw, out(["node (24.6.0) < 24.8.0", "uv (0.8.13) < 0.8.17"]));
@@ -975,6 +1246,24 @@ function runZsh(cmd) {
       const a = args.join(" ");
       if (a === "--version") return H(raw, out("uv 0.x.y (номер залежить від версії)"));
       if (a === "venv") { SIM.dirs.add(resolvePath(".venv")); return H(raw, out(["Using CPython 3.13.7 interpreter at: /opt/homebrew/bin/python3", "Creating virtual environment at: .venv", "Activate with: source .venv/bin/activate"])); }
+      const proj = baseOf(SIM.cwd), pyproj = resolvePath("pyproject.toml");
+      if (args[0] === "init") {
+        if (isFile(pyproj)) return H(raw, out(`error: Project is already initialized in \`${SIM.cwd}\` (\`pyproject.toml\` file exists)`, "line-err"), "warn");
+        [["pyproject.toml", `[project]\nname = "${proj}"\nversion = "0.1.0"\nrequires-python = ">=3.13"\ndependencies = []\n`], ["main.py", `def main():\n    print("Hello from ${proj}!")\n\n\nif __name__ == "__main__":\n    main()\n`], [".python-version", "3.13\n"]]
+          .forEach(([f, c]) => { const ab = resolvePath(f); if (!isFile(ab)) { SIM.files.set(ab, c); touchRepo(ab); } });
+        return H(raw, out(`Initialized project \`${proj}\``), "ok", "Створено pyproject.toml, main.py і .python-version (набір файлів залежить від версії uv).");
+      }
+      if (args[0] === "add" && args[1]) {
+        if (!isFile(pyproj)) return H(raw, out("error: No `pyproject.toml` found in current directory or any parent directory", "line-err"), "warn", "Спершу створи проєкт: uv init");
+        SIM.dirs.add(resolvePath(".venv"));
+        return H(raw, out(["Using CPython 3.13.7 interpreter at: /opt/homebrew/bin/python3", "Creating virtual environment at: .venv", "Resolved 6 packages in 312ms", "Installed 5 packages in 9ms", " + certifi==2026.x", ` + ${args[1]}==x.y.z`, " + urllib3==2.x"]), "ok", "uv записав залежність у pyproject.toml і встановив її в .venv — активувати venv вручну не треба.");
+      }
+      if (args[0] === "run" && args[1]) {
+        const ab = resolvePath(args[1]);
+        if (!isFile(ab)) return H(raw, out([`error: Failed to spawn: \`${args[1]}\``, "  Caused by: No such file or directory (os error 2)"], "line-err"), "warn");
+        const pr = (SIM.files.get(ab).match(/print\("([^"]*)"\)/) || [])[1];
+        return H(raw, out(pr != null ? pr : "(скрипт виконано в .venv проєкту — емуляція)", pr != null ? "line-ok" : "line-muted"));
+      }
       break;
     }
     case "node": if (args[0] === "--version" || args[0] === "-v") return H(raw, out("v24.x.y (залежить від встановленої версії)")); break;
@@ -985,6 +1274,13 @@ function runZsh(cmd) {
       if (a === "--version") return H(raw, out("11.x.y"));
       break;
     }
+    case "bash": case "sh": case "zsh": {
+      const f = rest[0]; if (!f) break;
+      const abs = resolvePath(f);
+      if (!isFile(abs)) return H(raw, out(`${name}: ${f}: No such file or directory`, "line-err"), "warn");
+      const echoes = fileLines(abs).map(l => (l.match(/^\s*echo\s+"?([^"]*)"?/) || [])[1]).filter(x => x != null);
+      return H(raw, out(echoes.length ? echoes : ["(скрипт виконано)"]) + out(`(${f} виконано з усіма твоїми правами — саме тому його спершу читають: less ${f})`, "line-warn"), "warn");
+    }
     case "npx": return H(raw, out("Need to install the following packages: … Ok to proceed? (y) — npx завантажує і запускає пакет з npm (емуляція).", "line-muted"), "warn", "npx виконує код пакета з інтернету — перевір назву пакета.");
 
     // AI CLI
@@ -994,7 +1290,7 @@ function runZsh(cmd) {
       }
       const warns = [];
       if (SIM.cwd === HOME || SIM.cwd === "/") warns.push("⚠ Ти в домашній папці / корені — агент бачитиме все. Перейди в папку проєкту.");
-      else if (inRepo() && (SIM.git.modified.size || SIM.git.staged.size)) warns.push("⚠ Є незакомічені зміни — потім важко відрізнити свої від змін агента. Спершу commit або stash.");
+      else if (inRepo() && (SIM.git.modified.size || SIM.git.staged.size || SIM.git.untracked.size)) warns.push("⚠ Є незакомічені зміни — потім важко відрізнити свої від змін агента. Спершу commit або stash.");
       else if (!inRepo()) warns.push("⚠ Це не git-репозиторій — відкотити зміни агента буде нічим.");
       if (inRepo() && SIM.git.branch === "main") warns.push("Порада: окрема гілка — git switch -c ai-experiment.");
       return H(raw, `<span class="line-hl">${esc(name)}</span> <span class="line-muted">— інтерактивний агент у ${esc(tilde(SIM.cwd))} (емуляція; вихід — /exit або Ctrl+C)</span>` +
@@ -1027,6 +1323,14 @@ function runZsh(cmd) {
     case "dd": return H(raw, `<span class="line-err">⛔ Тренажер не виконує dd.</span><br><span class="line-muted">Помилка в of=/dev/diskN перезапише не той диск без жодного питання. Для запису образів — Raspberry Pi Imager або balenaEtcher.</span>`, "danger");
     case "launchctl": {
       if (args[0] === "list") return H(raw, out("(довгий список — відфільтруй: launchctl list | grep com.stas)", "line-muted"));
+      const pm = raw.match(/^launchctl\s+print\s+(\S+(?:\s+-u\))?\S*)$/);
+      if (pm) {
+        const target = pm[1].replace("$(id -u)", "501");
+        const label = target.split("/")[2];
+        if (!/^gui\/501\//.test(target) || !label) return H(raw, out("Usage: launchctl print <domain-target> | <service-target>", "line-err"), "warn");
+        if (label !== "com.stas.backup") return H(raw, out(["Bad request.", `Could not find service "${label}" in domain for user gui: 501`], "line-err"), "warn");
+        return H(raw, out([`gui/501/${label} = {`, "\tactive count = 0", `\tpath = ${HOME}/Library/LaunchAgents/${label}.plist`, "\tstate = not running", "\tprogram = /bin/zsh", "\tlast exit code = 0", "}"]), "ok", "Детальний стан сервісу: шлях до .plist, стан, код останнього завершення. $(id -u) підставляє твій UID (тут 501).");
+      }
       if (args[0] === "bootout" || args[0] === "bootstrap") return H(raw, out(`(${args[0]}: у тренажері не виконується. bootout вивантажує сервіс, bootstrap — завантажує; для своїх агентів домен gui/$(id -u))`, "line-warn"), "warn");
       break;
     }

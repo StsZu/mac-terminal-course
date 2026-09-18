@@ -16,7 +16,7 @@ window.CLI_COURSE.modules.push({
         { type: "cli", title: "Хто я, де я і яка в мене оболонка",
           intro: "<p>Ці команди лише показують інформацію — їх можна вводити скільки завгодно.</p>",
           commands: [
-            { cmd: "echo $SHELL", explain: "Виводить значення змінної <code>SHELL</code> — шлях до твоєї оболонки.", output: "/bin/zsh", risk: "low" },
+            { cmd: "echo $SHELL", explain: "Виводить значення змінної <code>SHELL</code> — шлях до твоєї оболонки входу (тієї, що стартує в новому вікні). Яка оболонка працює саме зараз, покаже <code>echo $0</code>.", output: "/bin/zsh", risk: "low" },
             { cmd: "whoami", explain: "Ім'я користувача, від якого виконуються команди. Важливо перед роботою з правами чи SSH.", output: "Stas", risk: "low" },
             { cmd: "hostname", explain: "Мережеве ім'я цього Mac. У запрошенні видно лише частину до першої крапки.", output: "MacBook-Pro.local", risk: "low" },
             { cmd: "pwd", explain: "Print working directory — повний шлях до папки, в якій ти зараз.", output: "/Users/Stas", risk: "low" }
@@ -56,7 +56,7 @@ window.CLI_COURSE.modules.push({
       ],
       quiz: [
         { question: "У команді `ls -la Documents` що є прапорцем?", options: ["`ls`", "`-la`", "`Documents`"], correct: 1, feedback: "`ls` — команда, `-la` — прапорці (детально + приховані), `Documents` — аргумент." },
-        { question: "Колега бачить у Terminal запрошення `bash-3.2$`. Яка команда покаже, яку оболонку він використовує?", options: ["`echo $SHELL`", "`whoami`", "`hostname`"], correct: 0, feedback: "`echo $SHELL` виводить шлях до оболонки користувача. `whoami` і `hostname` — про користувача і комп'ютер." },
+        { question: "Колега бачить у Terminal запрошення `bash-3.2$`. Яка команда покаже, яку оболонку він використовує?", options: ["`ps -p $$`", "`whoami`", "`hostname`"], correct: 0, feedback: "`$$` — номер процесу поточної оболонки, `ps -p $$` покаже її ім'я (тут `bash`); коротший варіант — `echo $0`. А `echo $SHELL` показує оболонку входу з налаштувань користувача — вона може бути `/bin/zsh`, навіть коли зараз запущено `bash`. `whoami` і `hostname` — про користувача і комп'ютер." },
         { question: "Що означає `%` в кінці запрошення zsh?", options: ["Команда виконується у фоні", "Попередня команда завершилась помилкою", "Shell чекає команду від звичайного користувача"], correct: 2, feedback: "`%` — звичайний користувач; `#` — root. Помилки й фонові задачі позначаються інакше." },
         { question: "Ти відкрив нове вікно Terminal і ввів `pwd`. Найімовірніший результат?", options: ["`/`", "`/Users/Stas`", "`/System`"], correct: 1, feedback: "Нова сесія стартує в домашній папці користувача — `/Users/Stas`." },
         { question: "Навіщо перевіряти `whoami` перед роботою з правами чи SSH?", options: ["Щоб знати, від імені якого користувача виконуватимуться команди", "Щоб прискорити Terminal", "Щоб змінити пароль"], correct: 0, feedback: "Права на файли й доступи залежать від користувача. `whoami` нічого не змінює." },

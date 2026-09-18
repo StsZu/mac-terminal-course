@@ -2,7 +2,7 @@ window.CLI_COURSE = window.CLI_COURSE || { modules: [], exam: null, cheatsheet: 
 window.CLI_COURSE.cheatsheet = {
   sections: [
     { title: "Основи й довідка", rows: [
-      { cmd: "echo $SHELL", desc: "Яка оболонка (на Mac — `/bin/zsh`)", risk: "low" },
+      { cmd: "echo $SHELL", desc: "Оболонка входу (на Mac — `/bin/zsh`); поточна — `echo $0`", risk: "low" },
       { cmd: "whoami", desc: "Поточний користувач", risk: "low" },
       { cmd: "hostname", desc: "Мережеве ім'я Mac", risk: "low" },
       { cmd: "pwd", desc: "Де я зараз", risk: "low" },
@@ -60,7 +60,8 @@ window.CLI_COURSE.cheatsheet = {
     ] },
     { title: "SSH і MikroTik", rows: [
       { cmd: "ssh Stas@10.0.0.254", desc: "Підключитися до роутера", risk: "medium" },
-      { cmd: "/export file=backup", desc: "На роутері: конфігурація у `backup.rsc`", risk: "medium" },
+      { cmd: "/export file=backup", desc: "На роутері: конфігурація текстом у `backup.rsc` (без паролів користувачів і SSH-ключів)", risk: "medium" },
+      { cmd: "/system backup save name=full", desc: "На роутері: повний бінарний бекап для того самого роутера (містить секрети)", risk: "medium" },
       { cmd: "/quit", desc: "На роутері: завершити сесію", risk: "low" },
       { cmd: "scp Stas@10.0.0.254:backup.rsc .", desc: "Забрати файл з роутера на Mac", risk: "medium" },
       { cmd: "ssh-keygen -t ed25519", desc: "Створити пару SSH-ключів", risk: "medium" },
@@ -124,10 +125,10 @@ window.CLI_COURSE.cheatsheet = {
       { cmd: "sudo pfctl -f / -d", desc: "Завантажити правила / вимкнути pf", risk: "high" }
     ] },
     { title: "Перенаправлення", rows: [
-      { cmd: "команда > file.txt", desc: "Записати вивід у файл (перезапис)", risk: "medium" },
-      { cmd: "команда >> file.txt", desc: "Дописати вивід у кінець файлу", risk: "medium" },
-      { cmd: "команда1 | команда2", desc: "Передати вивід наступній команді", risk: "low" },
-      { cmd: "команда1 && команда2", desc: "Друга — лише якщо перша успішна", risk: "low" }
+      { cmd: "echo \"Line 1\" > test.txt", desc: "Записати вивід у файл (перезапис)", risk: "medium" },
+      { cmd: "echo \"Line 2\" >> test.txt", desc: "Дописати вивід у кінець файлу", risk: "medium" },
+      { cmd: "history | grep ssh", desc: "Передати вивід наступній команді (`|` — конвеєр)", risk: "low" },
+      { cmd: "mkdir demo2 && cd demo2", desc: "Друга — лише якщо перша успішна (`&&`)", risk: "low" }
     ] }
   ]
 };

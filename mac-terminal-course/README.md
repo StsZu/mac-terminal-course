@@ -1,3 +1,5 @@
+> **Архів (до 2026-09).** Цей Markdown — стара версія уроків і може містити застарілі або хибні твердження. Актуальний курс — `index.html` (уроки, quiz, шпаргалка).
+
 # Mac Terminal — практичний курс
 
 Курс для роботи в macOS Terminal (`zsh`): файли, мережа, SSH/MikroTik, Git/GitHub, Python/Node/Homebrew, AI CLI та безпечна діагностика.
